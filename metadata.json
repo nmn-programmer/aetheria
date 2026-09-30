@@ -1,0 +1,6 @@
+{
+  "name": "Aetheria Breathwork",
+  "description": "An offline-first, procedurally synthesized breathwork companion for deep calm, HRV coherence, and focused awareness.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
