@@ -14,9 +14,9 @@ export default defineConfig(() => {
         includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
         manifest: {
           id: '/',
-          name: 'Aetheria Breathwork',
-          short_name: 'Aetheria',
-          description: 'An offline-first, procedurally synthesized breathwork companion for deep calm, HRV coherence, and focused awareness.',
+          name: 'Dhyaan Mudra',
+          short_name: 'Dhyaan Mudra',
+          description: 'Dhyaan Mudra v2.4 - An offline-first, procedurally synthesized breathwork companion for deep calm, HRV coherence, and focused awareness.',
           theme_color: '#07080D',
           background_color: '#07080D',
           display: 'standalone',

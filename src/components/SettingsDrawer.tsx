@@ -55,15 +55,17 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <Music className="w-3.5 h-3.5 text-cyan-400" />
-                Phase Guidance Bell
+                Phase Guidance &amp; Spoken Voice
               </label>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {[
                 { id: 'singing-bowl', label: 'Singing Bowl', sub: '432Hz Binaural' },
                 { id: 'zen-bell', label: 'Zen Bell', sub: 'Metallic Chime' },
                 { id: 'synth-hum', label: 'Synth Hum', sub: 'Warm Pad' },
-                { id: 'silent', label: 'Silent', sub: 'No Chimes' },
+                { id: 'voice-female', label: 'Serene Aura', sub: '🎙️ Female Voice' },
+                { id: 'voice-male', label: 'Calm Sage', sub: '🎙️ Male Voice' },
+                { id: 'silent', label: 'Silent', sub: 'No Audio Cues' },
               ].map(opt => (
                 <button
                   key={opt.id}
@@ -239,22 +241,42 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </button>
             </div>
 
-            {/* 3s Countdown Buffer */}
-            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <Timer className="w-4 h-4 text-cyan-400" />
-                <div>
-                  <div className="text-xs font-medium text-white">3s Preparation Buffer</div>
-                  <div className="text-[10px] text-slate-400">Calming 3-2-1 countdown before starting</div>
+            {/* Preparation Countdown Buffer Selector */}
+            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <Timer className="w-4 h-4 text-cyan-400" />
+                  <div>
+                    <div className="text-xs font-medium text-white">Preparation Buffer</div>
+                    <div className="text-[10px] text-slate-400">Settle-in countdown before the first inhale</div>
+                  </div>
                 </div>
+                <span className="text-xs font-mono text-cyan-300">
+                  {settings.prepDuration === 0 ? 'Instant' : `${settings.prepDuration}s`}
+                </span>
               </div>
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ prepCountdown: !settings.prepCountdown })}
-                className={`w-11 h-6 rounded-full transition-colors relative ${settings.prepCountdown ? 'bg-cyan-500' : 'bg-slate-700'}`}
-              >
-                <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${settings.prepCountdown ? 'left-6' : 'left-1'}`} />
-              </button>
+
+              <div className="grid grid-cols-4 gap-1.5 pt-1">
+                {[
+                  { value: 0, label: '0s (Off)' },
+                  { value: 3, label: '3s' },
+                  { value: 5, label: '5s' },
+                  { value: 10, label: '10s' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => onUpdateSettings({ prepDuration: opt.value, prepCountdown: opt.value > 0 })}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-medium text-center transition ${
+                      settings.prepDuration === opt.value
+                        ? 'bg-slate-800 border border-cyan-400 text-white font-semibold shadow-sm'
+                        : 'bg-slate-950/60 border border-slate-800/80 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Safety Filter */}
@@ -294,6 +316,13 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           >
             Done
           </button>
+        </div>
+
+        {/* Version branding */}
+        <div className="mt-4 text-center">
+          <span className="text-[10px] font-mono text-slate-500">
+            Dhyaan Mudra · v2.4.0 · Somatic Respiration Studio
+          </span>
         </div>
       </div>
     </div>

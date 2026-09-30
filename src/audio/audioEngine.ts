@@ -5,6 +5,7 @@
  */
 
 import { AudioGuidanceType, AmbientSoundType, BreathPhaseType } from '../types/breathwork';
+import { voiceEngine } from './voiceGuidanceEngine';
 
 class WebAudioEngine {
   private ctx: AudioContext | null = null;
@@ -105,11 +106,21 @@ class WebAudioEngine {
   }
 
   /**
-   * Play Phase Guidance Chime
+   * Play Phase Guidance Chime or Spoken Voice Cue
    */
   public playPhaseCue(cueType: AudioGuidanceType, phase: BreathPhaseType) {
     if (cueType === 'silent') return;
     this.ensureRunning();
+
+    if (cueType === 'voice-female' || cueType === 'voice-male') {
+      voiceEngine.speakPhaseCue(cueType, phase);
+      if (this.ctx && this.masterGain) {
+        // Play subtle low-frequency background harmonic bed behind voice
+        this.synthesizeSoftCueBed(phase, this.ctx.currentTime);
+      }
+      return;
+    }
+
     if (!this.ctx || !this.masterGain) return;
 
     const now = this.ctx.currentTime;
@@ -121,6 +132,25 @@ class WebAudioEngine {
     } else if (cueType === 'synth-hum') {
       this.synthesizeSynthHum(phase, now);
     }
+  }
+
+  /**
+   * Delicate acoustic harmonic bed behind spoken voice cues
+   */
+  private synthesizeSoftCueBed(phase: BreathPhaseType, now: number) {
+    if (!this.ctx || !this.masterGain) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const freq = phase === 'inhale' ? 432 : (phase === 'exhale' ? 324 : 384);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.1);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.8);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 1.9);
   }
 
   /**

@@ -36,7 +36,13 @@ export interface Technique {
 
 export type VisualizerMode = 'fluid-orb' | 'minimal-rings';
 
-export type AudioGuidanceType = 'singing-bowl' | 'zen-bell' | 'synth-hum' | 'silent';
+export type AudioGuidanceType = 
+  | 'singing-bowl' 
+  | 'zen-bell' 
+  | 'synth-hum' 
+  | 'voice-female' 
+  | 'voice-male' 
+  | 'silent';
 
 export type AmbientSoundType = 'none' | 'brown-noise' | 'ocean-surge';
 
@@ -51,7 +57,19 @@ export interface AppSettings {
   themeMode: ThemeMode;
   wakeLockEnabled: boolean;
   prepCountdown: boolean;
+  prepDuration: number; // 0 (off), 3, 5, 10 seconds
   safetyFilter: boolean;
+}
+
+export type AuthMode = 'guest' | 'authenticated';
+
+export interface AuthUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  isGuest: boolean;
+  providerId?: string;
 }
 
 export interface SessionRecord {
@@ -62,6 +80,8 @@ export interface SessionRecord {
   techniqueName: string;
   durationSeconds: number;
   completedCycles: number;
+  holdSeconds?: number;
+  avgCycleSeconds?: number;
 }
 
 export interface UserStats {
@@ -70,4 +90,6 @@ export interface UserStats {
   currentStreak: number;
   lastActiveDate: string | null;
   history: SessionRecord[];
+  totalHoldSeconds?: number;
+  unlockedAchievements?: string[];
 }

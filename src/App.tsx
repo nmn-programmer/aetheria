@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Pause, RotateCcw, Sliders, Award, Plus, Info, 
-  CheckCircle2, ShieldAlert, Repeat, Sparkles
+  CheckCircle2, ShieldAlert, Repeat, Sparkles, Timer, X
 } from 'lucide-react';
 import { 
   Technique, BreathPhaseType, AppSettings, UserStats, OutcomeCategory
@@ -14,6 +14,10 @@ import {
   loadSettings, saveSettings, loadCustomTechniques, saveCustomTechniques,
   getAllTechniques, loadUserStats, recordSessionCompletion
 } from './utils/storage';
+import { cloudSync } from './services/cloudSyncService';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthModal } from './components/AuthModal';
+import { UserAuthChip } from './components/UserAuthChip';
 import { BreathVisualizer } from './components/BreathVisualizer';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { StatsDrawer } from './components/StatsDrawer';
@@ -26,7 +30,9 @@ import { DesktopRightPanel } from './components/desktop/DesktopRightPanel';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
-export default function App() {
+function MainApp() {
+  const { user, migrationMessage, clearMigrationMessage } = useAuth();
+
   // App settings & persistence
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [userStats, setUserStats] = useState<UserStats>(loadUserStats);
@@ -50,9 +56,9 @@ export default function App() {
   // Session state
   const [isRunning, setIsRunning] = useState(false);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [currentPhase, setCurrentPhase] = useState<BreathPhaseType>('prep');
+  const [currentPhase, setCurrentPhase] = useState<BreathPhaseType>(settings.prepDuration > 0 ? 'prep' : 'inhale');
   const [phaseProgress, setPhaseProgress] = useState(0);
-  const [remainingPhaseSeconds, setRemainingPhaseSeconds] = useState(3);
+  const [remainingPhaseSeconds, setRemainingPhaseSeconds] = useState(settings.prepDuration > 0 ? settings.prepDuration : 4);
   const [completedCycles, setCompletedCycles] = useState(0);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [isCompleted, setIsCompleted] = useState(false);
@@ -62,6 +68,7 @@ export default function App() {
   const [showStats, setShowStats] = useState(false);
   const [showPatternStudio, setShowPatternStudio] = useState(false);
   const [showCycleConfig, setShowCycleConfig] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [infoModalTechnique, setInfoModalTechnique] = useState<Technique | null>(null);
 
   // Zen Mode (Inactivity fadeout after 4 seconds of stillness during active practice)
@@ -71,6 +78,7 @@ export default function App() {
   // High precision animation and timing refs
   const lastTickTimeRef = useRef<number>(0);
   const stepTimeAccumRef = useRef<number>(0);
+  const prepPreCuePlayedRef = useRef<boolean>(false);
   const isRunningRef = useRef(isRunning);
   const currentStepIndexRef = useRef(currentStepIndex);
   const currentTechniqueRef = useRef(currentTechnique);
@@ -84,6 +92,22 @@ export default function App() {
   sessionTargetCyclesRef.current = sessionTargetCycles;
   completedCyclesRef.current = completedCycles;
   settingsRef.current = settings;
+
+  // Sync state when user logs in / pulls cloud data
+  const handleCloudDataPulled = useCallback((data: { settings?: AppSettings; customTechniques?: Technique[]; stats?: UserStats }) => {
+    if (data.settings) {
+      setSettings(data.settings);
+      saveSettings(data.settings);
+    }
+    if (data.customTechniques && data.customTechniques.length > 0) {
+      setCustomTechniques(data.customTechniques);
+      saveCustomTechniques(data.customTechniques);
+      setAllTechniques(getAllTechniques(settings.safetyFilter));
+    }
+    if (data.stats) {
+      setUserStats(data.stats);
+    }
+  }, [settings.safetyFilter]);
 
   // Refresh techniques on filter change
   useEffect(() => {
@@ -135,11 +159,14 @@ export default function App() {
     };
   }, [isRunning, resetZenTimer]);
 
-  // Settings update helper
+  // Settings update helper with Cloud Sync
   const handleUpdateSettings = (partial: Partial<AppSettings>) => {
     const updated = { ...settings, ...partial };
     setSettings(updated);
     saveSettings(updated);
+    if (user && !user.isGuest) {
+      cloudSync.syncSettings(updated);
+    }
   };
 
   // Switch Active Technique
@@ -154,18 +181,33 @@ export default function App() {
     setCompletedCycles(0);
     setIsCompleted(false);
     stepTimeAccumRef.current = 0;
+    prepPreCuePlayedRef.current = false;
 
     const firstStep = tech.steps[0];
-    if (settingsRef.current.prepCountdown) {
+    const prepSecs = settingsRef.current.prepDuration;
+    if (prepSecs > 0) {
       setCurrentPhase('prep');
-      setRemainingPhaseSeconds(3);
+      setRemainingPhaseSeconds(prepSecs);
     } else {
       setCurrentPhase(firstStep.type);
       setRemainingPhaseSeconds(firstStep.duration);
     }
   }, []);
 
-  // Session Complete Handler
+  // Skip Prep Buffer handler
+  const handleSkipPrep = useCallback(() => {
+    if (currentPhase !== 'prep') return;
+    stepTimeAccumRef.current = 0;
+    prepPreCuePlayedRef.current = false;
+    setCurrentStepIndex(0);
+    const firstStep = currentTechniqueRef.current.steps[0];
+    setCurrentPhase(firstStep.type);
+    setRemainingPhaseSeconds(firstStep.duration);
+    audioEngine.playPhaseCue(settingsRef.current.audioGuidance, firstStep.type);
+    triggerHaptic(firstStep.type, settingsRef.current.hapticsEnabled);
+  }, [currentPhase]);
+
+  // Session Complete Handler with Cloud Sync
   const handleSessionComplete = useCallback(() => {
     setIsRunning(false);
     setIsCompleted(true);
@@ -177,16 +219,29 @@ export default function App() {
     triggerHaptic('complete', settingsRef.current.hapticsEnabled);
     wakeLockManager.releaseLock();
 
-    const cycleSecs = currentTechniqueRef.current.steps.reduce((acc, s) => acc + s.duration, 0);
-    const totalSecs = cycleSecs * Math.max(1, completedCyclesRef.current);
+    const currentSteps = currentTechniqueRef.current.steps;
+    const cycleSecs = currentSteps.reduce((acc, s) => acc + s.duration, 0);
+    const holdSecsPerCycle = currentSteps
+      .filter(s => s.type === 'hold-in' || s.type === 'hold-out')
+      .reduce((acc, s) => acc + s.duration, 0);
+    const completed = Math.max(1, completedCyclesRef.current);
+    const totalSecs = cycleSecs * completed;
+    const totalHoldSecs = holdSecsPerCycle * completed;
+
     const updatedStats = recordSessionCompletion({
       techniqueId: currentTechniqueRef.current.id,
       techniqueName: currentTechniqueRef.current.name,
       durationSeconds: Math.max(30, Math.round(totalSecs)),
       completedCycles: completedCyclesRef.current,
+      holdSeconds: totalHoldSecs,
+      avgCycleSeconds: cycleSecs,
     });
     setUserStats(updatedStats);
-  }, []);
+
+    if (user && !user.isGuest && updatedStats.history[0]) {
+      cloudSync.syncCompletedSession(updatedStats.history[0], updatedStats);
+    }
+  }, [user]);
 
   // Main High-Precision Time Engine Loop
   useEffect(() => {
@@ -201,15 +256,23 @@ export default function App() {
       const dt = (now - lastTickTimeRef.current) / 1000;
       lastTickTimeRef.current = now;
 
-      // Handle prep countdown
+      // Handle prep countdown buffer
       if (currentPhase === 'prep') {
+        const prepTotal = settingsRef.current.prepDuration || 3;
         stepTimeAccumRef.current += dt;
-        const remaining = 3 - stepTimeAccumRef.current;
+        const remaining = prepTotal - stepTimeAccumRef.current;
         setRemainingPhaseSeconds(Math.max(0, remaining));
-        setPhaseProgress(Math.min(1, stepTimeAccumRef.current / 3));
+        setPhaseProgress(Math.min(1, stepTimeAccumRef.current / prepTotal));
+
+        // Pre-cue sound at 1s remaining
+        if (remaining <= 1 && !prepPreCuePlayedRef.current) {
+          prepPreCuePlayedRef.current = true;
+          audioEngine.playPhaseCue(settingsRef.current.audioGuidance, 'inhale');
+        }
 
         if (remaining <= 0) {
           stepTimeAccumRef.current = 0;
+          prepPreCuePlayedRef.current = false;
           setCurrentStepIndex(0);
           const firstStep = currentTechniqueRef.current.steps[0];
           setCurrentPhase(firstStep.type);
@@ -283,12 +346,15 @@ export default function App() {
       setCompletedCycles(0);
       setIsCompleted(false);
       stepTimeAccumRef.current = 0;
+      prepPreCuePlayedRef.current = false;
     }
 
-    if (settingsRef.current.prepCountdown && completedCyclesRef.current === 0 && currentStepIndexRef.current === 0 && currentPhase !== 'prep') {
+    const prepSecs = settingsRef.current.prepDuration;
+    if (prepSecs > 0 && completedCyclesRef.current === 0 && currentStepIndexRef.current === 0 && currentPhase !== 'prep') {
       setCurrentPhase('prep');
-      setRemainingPhaseSeconds(3);
+      setRemainingPhaseSeconds(prepSecs);
       stepTimeAccumRef.current = 0;
+      prepPreCuePlayedRef.current = false;
     } else if (currentPhase !== 'prep') {
       const activeStep = currentTechniqueRef.current.steps[currentStepIndexRef.current];
       if (activeStep) {
@@ -316,10 +382,12 @@ export default function App() {
     setPhaseProgress(0);
     setIsCompleted(false);
     stepTimeAccumRef.current = 0;
+    prepPreCuePlayedRef.current = false;
 
-    if (settingsRef.current.prepCountdown) {
+    const prepSecs = settingsRef.current.prepDuration;
+    if (prepSecs > 0) {
       setCurrentPhase('prep');
-      setRemainingPhaseSeconds(3);
+      setRemainingPhaseSeconds(prepSecs);
     } else {
       const firstStep = currentTechniqueRef.current.steps[0];
       setCurrentPhase(firstStep.type);
@@ -330,7 +398,6 @@ export default function App() {
   // Desktop Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -373,16 +440,20 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [allTechniques, handleSelectTechnique, pauseSession, resetSession, startSession]);
 
-  // Save Custom Pattern
+  // Save Custom Pattern with Cloud Sync
   const handleSaveCustomPattern = (newPattern: Technique) => {
     const updated = [newPattern, ...customTechniques];
     setCustomTechniques(updated);
     saveCustomTechniques(updated);
     setAllTechniques(getAllTechniques(settings.safetyFilter));
     handleSelectTechnique(newPattern);
+
+    if (user && !user.isGuest) {
+      cloudSync.syncCustomTechnique(newPattern);
+    }
   };
 
-  // Delete Custom Pattern
+  // Delete Custom Pattern with Cloud Sync
   const handleDeleteCustomPattern = (id: string) => {
     const updated = customTechniques.filter(t => t.id !== id);
     setCustomTechniques(updated);
@@ -391,6 +462,18 @@ export default function App() {
     if (currentTechnique.id === id) {
       handleSelectTechnique(DEFAULT_TECHNIQUES[0]);
     }
+
+    if (user && !user.isGuest) {
+      cloudSync.deleteCustomTechnique(id);
+    }
+  };
+
+  // Toggle quick prep duration
+  const cyclePrepDuration = () => {
+    const options = [0, 3, 5, 10];
+    const currentIndex = options.indexOf(settings.prepDuration);
+    const nextDuration = options[(currentIndex + 1) % options.length];
+    handleUpdateSettings({ prepDuration: nextDuration, prepCountdown: nextDuration > 0 });
   };
 
   // Outcome counts calculation
@@ -414,7 +497,7 @@ export default function App() {
 
   if (currentPhase === 'prep') {
     phaseLabel = 'Settle In';
-    phaseSubLabel = 'Get into a comfortable posture';
+    phaseSubLabel = 'Soft posture · Relax your shoulders';
   } else if (currentPhase === 'complete') {
     phaseLabel = 'Practice Complete';
     phaseSubLabel = 'Notice the peaceful stillness in your body';
@@ -452,6 +535,17 @@ export default function App() {
       {/* Offline Status Toast */}
       <OfflineIndicator />
 
+      {/* Cloud Migration Success Toast */}
+      {migrationMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 py-2 px-4 rounded-2xl bg-slate-900/95 border border-cyan-500/40 text-xs text-cyan-200 flex items-center gap-2 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-top-4">
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span>{migrationMessage}</span>
+          <button onClick={clearMigrationMessage} className="ml-1 text-slate-400 hover:text-white">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* DESKTOP LEFT PANEL (Practice Library & Intention Studio) */}
       <DesktopLeftPanel
         isOpen={isLeftPanelOpen}
@@ -481,8 +575,11 @@ export default function App() {
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
             </div>
             <div>
-              <h1 className="text-sm font-semibold tracking-wide text-white font-serif-display">Aetheria</h1>
-              <div className="text-[10px] text-slate-400 flex items-center gap-1.5 font-mono">
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-sm md:text-base font-semibold tracking-wide text-white font-serif-display">Dhyaan Mudra</h1>
+                <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300">v2.4.0</span>
+              </div>
+              <div className="text-[10px] md:text-xs text-slate-400 flex items-center gap-1.5 font-mono">
                 <span className="capitalize">{currentTechnique.target.replace('-', ' ')}</span>
                 <span>·</span>
                 <span className="hidden sm:inline">{currentTechnique.category}</span>
@@ -493,6 +590,9 @@ export default function App() {
 
           {/* Header Action Tools */}
           <div className="flex items-center gap-2">
+            {/* User Profile / Cloud Sync Chip */}
+            <UserAuthChip onOpenAuthModal={() => setShowAuthModal(true)} />
+
             <PWAInstallButton compact />
 
             <button
@@ -515,22 +615,32 @@ export default function App() {
 
         {/* Center Visualizer Breathing Stage */}
         <section className="relative flex-1 flex flex-col items-center justify-center px-4 w-full max-w-xl mx-auto my-auto min-h-0">
-          {/* Active Technique Pill & Cycle Adjustment Trigger */}
+          {/* Active Technique Pill, Prep Buffer & Cycle Adjustment Triggers */}
           <div className={`mb-2 flex items-center gap-2 transition-opacity duration-700 ${
             isZenDimmed ? 'opacity-0 pointer-events-none' : 'opacity-100'
           }`}>
             <button
               onClick={() => setInfoModalTechnique(currentTechnique)}
-              className="flex items-center gap-1.5 py-1 px-3.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs transition active:scale-95 shadow-sm"
+              className="flex items-center gap-1.5 py-1 px-3.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs md:text-sm transition active:scale-95 shadow-sm"
             >
               <span className="font-medium text-white">{currentTechnique.name}</span>
               <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             </button>
 
+            {/* Preparation buffer quick-toggle chip */}
+            <button
+              onClick={cyclePrepDuration}
+              className="flex items-center gap-1 py-1 px-2.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-slate-300 text-[11px] md:text-xs font-mono transition active:scale-95 shadow-sm"
+              title={`Prep Buffer: ${settings.prepDuration}s (Click to toggle)`}
+            >
+              <Timer className="w-3 h-3 text-cyan-400" />
+              <span>{settings.prepDuration === 0 ? '0s' : `${settings.prepDuration}s`}</span>
+            </button>
+
             {/* Quick cycle configurator trigger */}
             <button
               onClick={() => setShowCycleConfig(true)}
-              className="flex items-center gap-1 py-1 px-2.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-cyan-300 text-[11px] font-mono transition active:scale-95 shadow-sm"
+              className="flex items-center gap-1 py-1 px-2.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-cyan-300 text-[11px] md:text-xs font-mono transition active:scale-95 shadow-sm"
               title="Adjust target cycles"
             >
               <Repeat className="w-3 h-3" />
@@ -538,7 +648,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* HTML5 Canvas 2D Breath Visualizer */}
+          {/* HTML5 Canvas 2D Breath Visualizer with scaled typography */}
           <BreathVisualizer
             phase={currentPhase}
             phaseProgress={phaseProgress}
@@ -552,28 +662,29 @@ export default function App() {
             target={currentTechnique.target}
             isOled={settings.themeMode === 'oled'}
             onOpenCycleConfig={() => setShowCycleConfig(true)}
+            onSkipPrep={handleSkipPrep}
           />
 
           {/* Completion Card */}
           {isCompleted && (
-            <div className="mt-3 p-4 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-950/90 border border-cyan-500/30 text-center max-w-xs animate-in zoom-in-95 duration-300 shadow-xl shadow-cyan-950/20">
-              <div className="w-9 h-9 mx-auto rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center mb-1.5">
-                <CheckCircle2 className="w-5 h-5" />
+            <div className="mt-3 p-4 md:p-5 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-950/90 border border-cyan-500/30 text-center max-w-xs md:max-w-sm animate-in zoom-in-95 duration-300 shadow-xl shadow-cyan-950/20">
+              <div className="w-9 h-9 md:w-11 md:h-11 mx-auto rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center mb-1.5">
+                <CheckCircle2 className="w-5 h-5 md:w-6 md:h-6" />
               </div>
-              <h3 className="text-sm font-semibold text-white font-serif-display">Practice Complete</h3>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <h3 className="text-sm md:text-base font-semibold text-white font-serif-display">Practice Complete</h3>
+              <p className="text-xs md:text-sm text-slate-400 mt-0.5">
                 Completed {completedCycles} cycles of {currentTechnique.name}.
               </p>
               <div className="mt-3 flex gap-2">
                 <button
                   onClick={resetSession}
-                  className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition"
+                  className="flex-1 py-1.5 md:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs md:text-sm font-medium transition"
                 >
                   Reset
                 </button>
                 <button
                   onClick={startSession}
-                  className="flex-1 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold transition"
+                  className="flex-1 py-1.5 md:py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs md:text-sm font-semibold transition"
                 >
                   Repeat
                 </button>
@@ -638,25 +749,25 @@ export default function App() {
             <button
               onClick={resetSession}
               title="Reset practice (R)"
-              className="w-12 h-12 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
+              className="w-12 h-12 md:w-14 md:h-14 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
             >
-              <RotateCcw className="w-5 h-5" />
+              <RotateCcw className="w-5 h-5 md:w-6 md:h-6" />
             </button>
 
             {/* Tactile Play / Pause Action Button */}
             <button
               onClick={isRunning ? pauseSession : startSession}
               title={isRunning ? 'Pause practice (Space)' : 'Start practice (Space)'}
-              className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center shadow-xl active:scale-95 transition-all duration-300 ${
+              className={`w-16 h-16 sm:w-20 sm:h-20 md:w-22 md:h-22 rounded-full flex items-center justify-center shadow-xl active:scale-95 transition-all duration-300 ${
                 isRunning
                   ? 'bg-slate-800/95 border border-slate-700 text-white shadow-slate-900/40'
                   : 'bg-gradient-to-tr from-cyan-500 to-indigo-500 text-slate-950 shadow-cyan-500/25 hover:opacity-95'
               }`}
             >
               {isRunning ? (
-                <Pause className="w-7 h-7 sm:w-8 sm:h-8 fill-current" />
+                <Pause className="w-7 h-7 sm:w-8 sm:h-8 md:w-9 md:h-9 fill-current" />
               ) : (
-                <Play className="w-7 h-7 sm:w-8 sm:h-8 fill-current ml-1" />
+                <Play className="w-7 h-7 sm:w-8 sm:h-8 md:w-9 md:h-9 fill-current ml-1" />
               )}
             </button>
 
@@ -664,14 +775,14 @@ export default function App() {
             <button
               onClick={() => setInfoModalTechnique(currentTechnique)}
               title="View Science & Medical Mechanism"
-              className="w-12 h-12 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
+              className="w-12 h-12 md:w-14 md:h-14 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
             >
-              <Info className="w-5 h-5" />
+              <Info className="w-5 h-5 md:w-6 md:h-6" />
             </button>
           </div>
 
           {/* Desktop hotkeys hint */}
-          <div className="text-center text-[10px] text-slate-500 font-mono tracking-wider transition-opacity">
+          <div className="text-center text-[10px] md:text-xs text-slate-500 font-mono tracking-wider transition-opacity">
             <span className="hidden lg:inline">
               [Space] {isRunning ? 'Pause' : 'Play'} · [R] Reset · [← →] Switch Routine · [ [ ] ] Sidebars
             </span>
@@ -695,6 +806,13 @@ export default function App() {
       />
 
       {/* Modals & Bottom Drawers */}
+      {showAuthModal && (
+        <AuthModal
+          isOpen={showAuthModal}
+          onClose={() => setShowAuthModal(false)}
+        />
+      )}
+
       {showSettings && (
         <SettingsDrawer
           settings={settings}
@@ -749,5 +867,13 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
   );
 }

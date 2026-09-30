@@ -20,6 +20,7 @@ interface BreathVisualizerProps {
   target: NervousSystemTarget;
   isOled: boolean;
   onOpenCycleConfig?: () => void;
+  onSkipPrep?: () => void;
 }
 
 export const BreathVisualizer: React.FC<BreathVisualizerProps> = ({
@@ -35,6 +36,7 @@ export const BreathVisualizer: React.FC<BreathVisualizerProps> = ({
   target,
   isOled,
   onOpenCycleConfig,
+  onSkipPrep,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -308,35 +310,46 @@ export const BreathVisualizer: React.FC<BreathVisualizerProps> = ({
       />
 
       {/* Centered HUD Overlay for Phase & Countdown */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none text-center px-6">
+      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none text-center px-4 sm:px-6">
         {/* Subtle Phase Subtitle */}
         {phaseSubLabel && (
-          <span className="text-[11px] sm:text-xs tracking-wider uppercase text-slate-400 font-medium mb-1 drop-shadow-sm opacity-90 transition-all duration-300">
+          <span className="text-[11px] sm:text-xs md:text-sm lg:text-base tracking-wider uppercase text-slate-300 font-medium mb-1 drop-shadow-sm opacity-90 transition-all duration-300">
             {phaseSubLabel}
           </span>
         )}
 
         {/* Primary Phase Instruction Label */}
-        <h2 className="text-xl sm:text-2xl font-medium tracking-tight text-white mb-2 drop-shadow-md transition-all duration-300">
+        <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-medium tracking-tight text-white mb-2 md:mb-3 drop-shadow-md transition-all duration-300">
           {phaseLabel}
         </h2>
 
         {/* Phase Remaining Seconds Countdown */}
         {isRunning && phase !== 'complete' && (
-          <div className="flex items-baseline gap-1">
-            <span className="text-4xl sm:text-5xl font-light font-mono tracking-tighter text-white drop-shadow-lg">
+          <div className="flex items-baseline gap-1 md:gap-1.5">
+            <span className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-light font-mono tracking-tighter text-white drop-shadow-lg">
               {remainingPhaseSeconds <= 0 ? '0' : Math.ceil(remainingPhaseSeconds)}
             </span>
-            <span className="text-xs text-slate-400 font-mono">s</span>
+            <span className="text-xs md:text-sm lg:text-base text-slate-400 font-mono">s</span>
           </div>
         )}
 
+        {/* Prep Phase Skip Button */}
+        {phase === 'prep' && isRunning && onSkipPrep && (
+          <button
+            type="button"
+            onClick={onSkipPrep}
+            className="mt-3 pointer-events-auto py-1 px-3.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-[11px] md:text-xs text-cyan-300 hover:text-white font-medium tracking-wide transition active:scale-95 shadow-sm"
+          >
+            Start Now →
+          </button>
+        )}
+
         {/* Cycle indicator (interactive config trigger) */}
-        {phase !== 'complete' && (
+        {phase !== 'complete' && phase !== 'prep' && (
           <button
             type="button"
             onClick={onOpenCycleConfig}
-            className="mt-3 pointer-events-auto flex items-center gap-1.5 py-1 px-3 rounded-full bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-400 hover:text-white font-mono tracking-wider uppercase transition active:scale-95 shadow-sm"
+            className="mt-3 pointer-events-auto flex items-center gap-1.5 py-1 px-3 md:py-1.5 md:px-4 rounded-full bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-[11px] md:text-xs text-slate-400 hover:text-white font-mono tracking-wider uppercase transition active:scale-95 shadow-sm"
             title="Configure target cycles"
           >
             <span>Cycle</span>
