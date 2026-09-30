@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Pause, RotateCcw, Sliders, Award, Plus, Info, 
-  Sparkles, CheckCircle2, ShieldAlert, Repeat, Clock
+  CheckCircle2, ShieldAlert, Repeat, Sparkles
 } from 'lucide-react';
 import { 
   Technique, BreathPhaseType, AppSettings, UserStats, OutcomeCategory
@@ -21,6 +21,8 @@ import { CustomPatternStudio } from './components/CustomPatternStudio';
 import { TechniqueInfoModal } from './components/TechniqueInfoModal';
 import { CycleConfigModal } from './components/CycleConfigModal';
 import { OutcomeSelector } from './components/OutcomeSelector';
+import { DesktopLeftPanel } from './components/desktop/DesktopLeftPanel';
+import { DesktopRightPanel } from './components/desktop/DesktopRightPanel';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
@@ -33,6 +35,10 @@ export default function App() {
 
   // Outcome filter state
   const [selectedOutcome, setSelectedOutcome] = useState<OutcomeCategory>('all');
+
+  // Desktop Collapsible Panels State
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
 
   // Active technique & customizable target cycles
   const [currentTechnique, setCurrentTechnique] = useState<Technique>(() => {
@@ -137,8 +143,9 @@ export default function App() {
   };
 
   // Switch Active Technique
-  const handleSelectTechnique = (tech: Technique, customCycles?: number) => {
-    pauseSession();
+  const handleSelectTechnique = useCallback((tech: Technique, customCycles?: number) => {
+    setIsRunning(false);
+    wakeLockManager.releaseLock();
     setCurrentTechnique(tech);
     const targetCount = customCycles !== undefined ? customCycles : (tech.defaultCycles || 6);
     setSessionTargetCycles(targetCount);
@@ -149,14 +156,14 @@ export default function App() {
     stepTimeAccumRef.current = 0;
 
     const firstStep = tech.steps[0];
-    if (settings.prepCountdown) {
+    if (settingsRef.current.prepCountdown) {
       setCurrentPhase('prep');
       setRemainingPhaseSeconds(3);
     } else {
       setCurrentPhase(firstStep.type);
       setRemainingPhaseSeconds(firstStep.duration);
     }
-  };
+  }, []);
 
   // Session Complete Handler
   const handleSessionComplete = useCallback(() => {
@@ -245,13 +252,11 @@ export default function App() {
           completedCyclesRef.current = nextCycleCount;
           setCompletedCycles(nextCycleCount);
 
-          // Check if target cycles reached (0 means infinite open flow)
           const target = sessionTargetCyclesRef.current;
           if (target > 0 && nextCycleCount >= target) {
             handleSessionComplete();
             return;
           } else {
-            // Begin next cycle
             currentStepIndexRef.current = 0;
             setCurrentStepIndex(0);
             const firstStep = currentTechniqueRef.current.steps[0];
@@ -271,7 +276,7 @@ export default function App() {
   }, [isRunning, currentPhase, handleSessionComplete]);
 
   // Start / Resume Practice
-  const startSession = () => {
+  const startSession = useCallback(() => {
     audioEngine.ensureRunning();
     if (isCompleted) {
       setCurrentStepIndex(0);
@@ -280,31 +285,31 @@ export default function App() {
       stepTimeAccumRef.current = 0;
     }
 
-    if (settings.prepCountdown && completedCycles === 0 && currentStepIndex === 0 && currentPhase !== 'prep') {
+    if (settingsRef.current.prepCountdown && completedCyclesRef.current === 0 && currentStepIndexRef.current === 0 && currentPhase !== 'prep') {
       setCurrentPhase('prep');
       setRemainingPhaseSeconds(3);
       stepTimeAccumRef.current = 0;
     } else if (currentPhase !== 'prep') {
-      const activeStep = currentTechnique.steps[currentStepIndex];
+      const activeStep = currentTechniqueRef.current.steps[currentStepIndexRef.current];
       if (activeStep) {
-        audioEngine.playPhaseCue(settings.audioGuidance, activeStep.type);
-        triggerHaptic(activeStep.type, settings.hapticsEnabled);
+        audioEngine.playPhaseCue(settingsRef.current.audioGuidance, activeStep.type);
+        triggerHaptic(activeStep.type, settingsRef.current.hapticsEnabled);
       }
     }
 
     lastTickTimeRef.current = performance.now();
     setIsRunning(true);
     if (!sessionStartTime) setSessionStartTime(Date.now());
-  };
+  }, [isCompleted, currentPhase, sessionStartTime]);
 
   // Pause Practice
-  const pauseSession = () => {
+  const pauseSession = useCallback(() => {
     setIsRunning(false);
     wakeLockManager.releaseLock();
-  };
+  }, []);
 
   // Reset Practice
-  const resetSession = () => {
+  const resetSession = useCallback(() => {
     pauseSession();
     setCurrentStepIndex(0);
     setCompletedCycles(0);
@@ -312,15 +317,61 @@ export default function App() {
     setIsCompleted(false);
     stepTimeAccumRef.current = 0;
 
-    if (settings.prepCountdown) {
+    if (settingsRef.current.prepCountdown) {
       setCurrentPhase('prep');
       setRemainingPhaseSeconds(3);
     } else {
-      const firstStep = currentTechnique.steps[0];
+      const firstStep = currentTechniqueRef.current.steps[0];
       setCurrentPhase(firstStep.type);
       setRemainingPhaseSeconds(firstStep.duration);
     }
-  };
+  }, [pauseSession]);
+
+  // Desktop Keyboard Shortcuts Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (isRunningRef.current) {
+          pauseSession();
+        } else {
+          startSession();
+        }
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        resetSession();
+      } else if (e.key === '[') {
+        e.preventDefault();
+        setIsLeftPanelOpen(prev => !prev);
+      } else if (e.key === ']') {
+        e.preventDefault();
+        setIsRightPanelOpen(prev => !prev);
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        handleUpdateSettings({
+          audioGuidance: settingsRef.current.audioGuidance === 'silent' ? 'singing-bowl' : 'silent'
+        });
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const available = allTechniques;
+        const currentIdx = available.findIndex(t => t.id === currentTechniqueRef.current.id);
+        if (currentIdx !== -1) {
+          let nextIdx = e.key === 'ArrowRight' ? currentIdx + 1 : currentIdx - 1;
+          if (nextIdx >= available.length) nextIdx = 0;
+          if (nextIdx < 0) nextIdx = available.length - 1;
+          handleSelectTechnique(available[nextIdx]);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [allTechniques, handleSelectTechnique, pauseSession, resetSession, startSession]);
 
   // Save Custom Pattern
   const handleSaveCustomPattern = (newPattern: Technique) => {
@@ -391,225 +442,257 @@ export default function App() {
   }
 
   return (
-    <main 
-      onClick={resetZenTimer}
-      className={`relative w-full h-[100dvh] min-h-[100dvh] flex flex-col justify-between overflow-hidden select-none transition-colors duration-1000 ${bgClasses}`}
-    >
+    <div className={`relative flex flex-row w-full h-[100dvh] min-h-[100dvh] overflow-hidden select-none transition-colors duration-1000 ${bgClasses}`}>
       {/* Dynamic Atmospheric Ambient Glow */}
       <div 
         className="pointer-events-none absolute inset-0 transition-all duration-1000 z-0"
         style={{ background: ambientGlowColor }}
       />
 
-      {/* Offline Status Indicator */}
+      {/* Offline Status Toast */}
       <OfflineIndicator />
 
-      {/* Top Header Bar */}
-      <header className={`relative z-10 w-full max-w-xl mx-auto px-4 pt-safe flex items-center justify-between transition-opacity duration-700 ${
-        isZenDimmed ? 'opacity-0 pointer-events-none' : 'opacity-100'
-      }`}>
-        {/* Brand & Target Tag */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500/20 to-indigo-500/20 border border-slate-700/60 flex items-center justify-center text-cyan-300">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-wide text-white font-serif-display">Aetheria</h1>
-            <div className="text-[10px] text-slate-400 flex items-center gap-1.5 font-mono">
-              <span className="capitalize">{currentTechnique.target.replace('-', ' ')}</span>
-              <span>·</span>
-              <span>100% Offline</span>
-            </div>
-          </div>
-        </div>
+      {/* DESKTOP LEFT PANEL (Practice Library & Intention Studio) */}
+      <DesktopLeftPanel
+        isOpen={isLeftPanelOpen}
+        onToggle={() => setIsLeftPanelOpen(prev => !prev)}
+        selectedOutcome={selectedOutcome}
+        onSelectOutcome={setSelectedOutcome}
+        outcomeCountMap={outcomeCountMap}
+        techniques={filteredTechniques}
+        currentTechnique={currentTechnique}
+        onSelectTechnique={handleSelectTechnique}
+        onOpenPatternStudio={() => setShowPatternStudio(true)}
+        onOpenInfoModal={tech => setInfoModalTechnique(tech)}
+      />
 
-        {/* Header Action Tools */}
-        <div className="flex items-center gap-2">
-          <PWAInstallButton compact />
-
-          <button
-            onClick={() => setShowStats(true)}
-            title="Mindful Practice Log & Streak"
-            className="w-10 h-10 rounded-full bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 flex items-center justify-center active:scale-95 transition"
-          >
-            <Award className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={() => setShowSettings(true)}
-            title="Experience Settings"
-            className="w-10 h-10 rounded-full bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 flex items-center justify-center active:scale-95 transition"
-          >
-            <Sliders className="w-4 h-4" />
-          </button>
-        </div>
-      </header>
-
-      {/* Main Breathing Visualizer Stage */}
-      <section className="relative z-10 flex-1 flex flex-col items-center justify-center px-4 w-full max-w-lg mx-auto my-auto">
-        {/* Active Technique Pill & Cycle Adjustment Trigger */}
-        <div className={`mb-2 flex items-center gap-2 transition-opacity duration-700 ${
+      {/* CENTER FOCAL SANCTUARY */}
+      <main 
+        onClick={resetZenTimer}
+        className="relative z-10 flex-1 flex flex-col justify-between h-full overflow-hidden transition-all duration-500"
+      >
+        {/* Top Header Bar */}
+        <header className={`w-full max-w-4xl mx-auto px-4 pt-safe flex items-center justify-between transition-opacity duration-700 shrink-0 ${
           isZenDimmed ? 'opacity-0 pointer-events-none' : 'opacity-100'
         }`}>
-          <button
-            onClick={() => setInfoModalTechnique(currentTechnique)}
-            className="flex items-center gap-1.5 py-1 px-3 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs transition active:scale-95 shadow-sm"
-          >
-            <span className="font-medium text-white">{currentTechnique.name}</span>
-            <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-          </button>
-
-          {/* Quick cycle configurator trigger */}
-          <button
-            onClick={() => setShowCycleConfig(true)}
-            className="flex items-center gap-1 py-1 px-2.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-cyan-300 text-[11px] font-mono transition active:scale-95 shadow-sm"
-            title="Adjust target cycles"
-          >
-            <Repeat className="w-3 h-3" />
-            <span>{sessionTargetCycles > 0 ? `${sessionTargetCycles}c` : '∞'}</span>
-          </button>
-        </div>
-
-        {/* HTML5 Canvas 2D Breath Visualizer */}
-        <BreathVisualizer
-          phase={currentPhase}
-          phaseProgress={phaseProgress}
-          remainingPhaseSeconds={remainingPhaseSeconds}
-          phaseLabel={phaseLabel}
-          phaseSubLabel={phaseSubLabel}
-          cycleCount={completedCycles + 1}
-          totalCycles={sessionTargetCycles}
-          isRunning={isRunning}
-          visualizerMode={settings.visualizerMode}
-          target={currentTechnique.target}
-          isOled={settings.themeMode === 'oled'}
-          onOpenCycleConfig={() => setShowCycleConfig(true)}
-        />
-
-        {/* Completion Card */}
-        {isCompleted && (
-          <div className="mt-3 p-4 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-950/90 border border-cyan-500/30 text-center max-w-xs animate-in zoom-in-95 duration-300 shadow-xl shadow-cyan-950/20">
-            <div className="w-9 h-9 mx-auto rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center mb-1.5">
-              <CheckCircle2 className="w-5 h-5" />
+          {/* Brand */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500/20 to-indigo-500/20 border border-slate-700/60 flex items-center justify-center text-cyan-300">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
             </div>
-            <h3 className="text-sm font-semibold text-white font-serif-display">Practice Complete</h3>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Completed {completedCycles} cycles of {currentTechnique.name}.
-            </p>
-            <div className="mt-3 flex gap-2">
-              <button
-                onClick={resetSession}
-                className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition"
-              >
-                Reset
-              </button>
-              <button
-                onClick={startSession}
-                className="flex-1 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold transition"
-              >
-                Repeat
-              </button>
+            <div>
+              <h1 className="text-sm font-semibold tracking-wide text-white font-serif-display">Aetheria</h1>
+              <div className="text-[10px] text-slate-400 flex items-center gap-1.5 font-mono">
+                <span className="capitalize">{currentTechnique.target.replace('-', ' ')}</span>
+                <span>·</span>
+                <span className="hidden sm:inline">{currentTechnique.category}</span>
+                <span className="sm:hidden">Offline</span>
+              </div>
             </div>
           </div>
-        )}
-      </section>
 
-      {/* Bottom Thumb Zone (Bottom 35% of Screen - Ergonomic Controls) */}
-      <footer className={`relative z-10 w-full max-w-lg mx-auto px-4 pb-safe flex flex-col gap-2.5 transition-opacity duration-700 ${
-        isZenDimmed ? 'opacity-25 hover:opacity-100' : 'opacity-100'
-      }`}>
-        {/* Outcome Intention Selector */}
-        <div>
-          <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 px-1 mb-1">
-            <span className="uppercase tracking-wider">What is your intention?</span>
+          {/* Header Action Tools */}
+          <div className="flex items-center gap-2">
+            <PWAInstallButton compact />
+
             <button
-              onClick={() => setShowPatternStudio(true)}
-              className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition active:scale-95"
+              onClick={() => setShowStats(true)}
+              title="Practice Habits Log"
+              className="w-10 h-10 rounded-full bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 flex items-center justify-center active:scale-95 transition"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Studio</span>
+              <Award className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => setShowSettings(true)}
+              title="Experience Settings"
+              className="w-10 h-10 rounded-full bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 flex items-center justify-center active:scale-95 transition"
+            >
+              <Sliders className="w-4 h-4" />
             </button>
           </div>
-          <OutcomeSelector
-            selectedOutcome={selectedOutcome}
-            onSelectOutcome={setSelectedOutcome}
-            countMap={outcomeCountMap}
-          />
-        </div>
+        </header>
 
-        {/* Filtered Techniques Quick Carousel */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-          {filteredTechniques.map(tech => {
-            const isSelected = tech.id === currentTechnique.id;
-            let dotColor = 'bg-cyan-400';
-            if (tech.target === 'down-regulation') dotColor = 'bg-indigo-400';
-            else if (tech.target === 'energy') dotColor = 'bg-amber-400';
+        {/* Center Visualizer Breathing Stage */}
+        <section className="relative flex-1 flex flex-col items-center justify-center px-4 w-full max-w-xl mx-auto my-auto min-h-0">
+          {/* Active Technique Pill & Cycle Adjustment Trigger */}
+          <div className={`mb-2 flex items-center gap-2 transition-opacity duration-700 ${
+            isZenDimmed ? 'opacity-0 pointer-events-none' : 'opacity-100'
+          }`}>
+            <button
+              onClick={() => setInfoModalTechnique(currentTechnique)}
+              className="flex items-center gap-1.5 py-1 px-3.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs transition active:scale-95 shadow-sm"
+            >
+              <span className="font-medium text-white">{currentTechnique.name}</span>
+              <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            </button>
 
-            return (
-              <button
-                key={tech.id}
-                onClick={() => handleSelectTechnique(tech)}
-                className={`shrink-0 py-2 px-3 rounded-2xl border text-xs font-medium transition-all active:scale-95 flex items-center gap-2 ${
-                  isSelected
-                    ? 'bg-slate-800/90 border-cyan-400/80 text-white shadow-md shadow-cyan-950/20'
-                    : 'bg-slate-900/60 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                }`}
-              >
-                <span className={`w-2 h-2 rounded-full ${dotColor}`} />
-                <span className="whitespace-nowrap">{tech.name}</span>
-                {tech.intensity === 'intense' && (
-                  <ShieldAlert className="w-3 h-3 text-amber-400 shrink-0" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Primary Interactive Controls (Play / Pause / Reset) */}
-        <div className="flex items-center justify-center gap-4 py-1.5">
-          {/* Reset Button */}
-          <button
-            onClick={resetSession}
-            title="Reset practice"
-            className="w-12 h-12 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
-          >
-            <RotateCcw className="w-5 h-5" />
-          </button>
-
-          {/* Large Tactile Play / Pause Action Button */}
-          <button
-            onClick={isRunning ? pauseSession : startSession}
-            title={isRunning ? 'Pause practice' : 'Start practice'}
-            className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center shadow-xl active:scale-95 transition-all duration-300 ${
-              isRunning
-                ? 'bg-slate-800/95 border border-slate-700 text-white shadow-slate-900/40'
-                : 'bg-gradient-to-tr from-cyan-500 to-indigo-500 text-slate-950 shadow-cyan-500/25 hover:opacity-95'
-            }`}
-          >
-            {isRunning ? (
-              <Pause className="w-7 h-7 sm:w-8 sm:h-8 fill-current" />
-            ) : (
-              <Play className="w-7 h-7 sm:w-8 sm:h-8 fill-current ml-1" />
-            )}
-          </button>
-
-          {/* Science & Medical Info Trigger */}
-          <button
-            onClick={() => setInfoModalTechnique(currentTechnique)}
-            title="View Science & Medical Mechanism"
-            className="w-12 h-12 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
-          >
-            <Info className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Zen Mode hint */}
-        {isRunning && (
-          <div className="text-center text-[10px] text-slate-500 font-mono tracking-widest uppercase transition-opacity">
-            {isZenDimmed ? 'Tap anywhere to restore controls' : 'Zen mode activates in 4s'}
+            {/* Quick cycle configurator trigger */}
+            <button
+              onClick={() => setShowCycleConfig(true)}
+              className="flex items-center gap-1 py-1 px-2.5 rounded-full bg-slate-900/70 border border-slate-800 hover:border-slate-700 text-cyan-300 text-[11px] font-mono transition active:scale-95 shadow-sm"
+              title="Adjust target cycles"
+            >
+              <Repeat className="w-3 h-3" />
+              <span>{sessionTargetCycles > 0 ? `${sessionTargetCycles}c` : '∞'}</span>
+            </button>
           </div>
-        )}
-      </footer>
+
+          {/* HTML5 Canvas 2D Breath Visualizer */}
+          <BreathVisualizer
+            phase={currentPhase}
+            phaseProgress={phaseProgress}
+            remainingPhaseSeconds={remainingPhaseSeconds}
+            phaseLabel={phaseLabel}
+            phaseSubLabel={phaseSubLabel}
+            cycleCount={completedCycles + 1}
+            totalCycles={sessionTargetCycles}
+            isRunning={isRunning}
+            visualizerMode={settings.visualizerMode}
+            target={currentTechnique.target}
+            isOled={settings.themeMode === 'oled'}
+            onOpenCycleConfig={() => setShowCycleConfig(true)}
+          />
+
+          {/* Completion Card */}
+          {isCompleted && (
+            <div className="mt-3 p-4 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-950/90 border border-cyan-500/30 text-center max-w-xs animate-in zoom-in-95 duration-300 shadow-xl shadow-cyan-950/20">
+              <div className="w-9 h-9 mx-auto rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center mb-1.5">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-semibold text-white font-serif-display">Practice Complete</h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Completed {completedCycles} cycles of {currentTechnique.name}.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={resetSession}
+                  className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={startSession}
+                  className="flex-1 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold transition"
+                >
+                  Repeat
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Bottom Interactive Area */}
+        <footer className={`w-full max-w-xl mx-auto px-4 pb-safe flex flex-col gap-2.5 transition-opacity duration-700 shrink-0 ${
+          isZenDimmed ? 'opacity-25 hover:opacity-100' : 'opacity-100'
+        }`}>
+          {/* Mobile-Only Outcome Selector & Quick Carousel (hidden on lg desktop since left panel has it) */}
+          <div className="lg:hidden flex flex-col gap-2">
+            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 px-1">
+              <span className="uppercase tracking-wider">What is your intention?</span>
+              <button
+                onClick={() => setShowPatternStudio(true)}
+                className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Studio</span>
+              </button>
+            </div>
+            <OutcomeSelector
+              selectedOutcome={selectedOutcome}
+              onSelectOutcome={setSelectedOutcome}
+              countMap={outcomeCountMap}
+            />
+
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+              {filteredTechniques.map(tech => {
+                const isSelected = tech.id === currentTechnique.id;
+                let dotColor = 'bg-cyan-400';
+                if (tech.target === 'down-regulation') dotColor = 'bg-indigo-400';
+                else if (tech.target === 'energy') dotColor = 'bg-amber-400';
+
+                return (
+                  <button
+                    key={tech.id}
+                    onClick={() => handleSelectTechnique(tech)}
+                    className={`shrink-0 py-2 px-3 rounded-2xl border text-xs font-medium transition-all active:scale-95 flex items-center gap-2 ${
+                      isSelected
+                        ? 'bg-slate-800/90 border-cyan-400/80 text-white shadow-md shadow-cyan-950/20'
+                        : 'bg-slate-900/60 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+                    <span className="whitespace-nowrap">{tech.name}</span>
+                    {tech.intensity === 'intense' && (
+                      <ShieldAlert className="w-3 h-3 text-amber-400 shrink-0" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Primary Interactive Controls (Play / Pause / Reset) */}
+          <div className="flex items-center justify-center gap-4 py-1.5">
+            {/* Reset Button */}
+            <button
+              onClick={resetSession}
+              title="Reset practice (R)"
+              className="w-12 h-12 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
+            >
+              <RotateCcw className="w-5 h-5" />
+            </button>
+
+            {/* Tactile Play / Pause Action Button */}
+            <button
+              onClick={isRunning ? pauseSession : startSession}
+              title={isRunning ? 'Pause practice (Space)' : 'Start practice (Space)'}
+              className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center shadow-xl active:scale-95 transition-all duration-300 ${
+                isRunning
+                  ? 'bg-slate-800/95 border border-slate-700 text-white shadow-slate-900/40'
+                  : 'bg-gradient-to-tr from-cyan-500 to-indigo-500 text-slate-950 shadow-cyan-500/25 hover:opacity-95'
+              }`}
+            >
+              {isRunning ? (
+                <Pause className="w-7 h-7 sm:w-8 sm:h-8 fill-current" />
+              ) : (
+                <Play className="w-7 h-7 sm:w-8 sm:h-8 fill-current ml-1" />
+              )}
+            </button>
+
+            {/* Science & Medical Info Trigger */}
+            <button
+              onClick={() => setInfoModalTechnique(currentTechnique)}
+              title="View Science & Medical Mechanism"
+              className="w-12 h-12 rounded-full bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center active:scale-90 transition shadow-sm"
+            >
+              <Info className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Desktop hotkeys hint */}
+          <div className="text-center text-[10px] text-slate-500 font-mono tracking-wider transition-opacity">
+            <span className="hidden lg:inline">
+              [Space] {isRunning ? 'Pause' : 'Play'} · [R] Reset · [← →] Switch Routine · [ [ ] ] Sidebars
+            </span>
+            <span className="lg:hidden uppercase">
+              {isRunning ? (isZenDimmed ? 'Tap to wake controls' : 'Zen mode activates in 4s') : 'Select rhythm and begin'}
+            </span>
+          </div>
+        </footer>
+      </main>
+
+      {/* DESKTOP RIGHT PANEL (Telemetry, Soundscape & Habits) */}
+      <DesktopRightPanel
+        isOpen={isRightPanelOpen}
+        onToggle={() => setIsRightPanelOpen(prev => !prev)}
+        technique={currentTechnique}
+        settings={settings}
+        onUpdateSettings={handleUpdateSettings}
+        stats={userStats}
+        onOpenInfoModal={tech => setInfoModalTechnique(tech)}
+        onOpenStats={() => setShowStats(true)}
+      />
 
       {/* Modals & Bottom Drawers */}
       {showSettings && (
@@ -665,6 +748,6 @@ export default function App() {
           }}
         />
       )}
-    </main>
+    </div>
   );
 }

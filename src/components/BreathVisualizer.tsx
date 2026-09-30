@@ -99,6 +99,14 @@ export const BreathVisualizer: React.FC<BreathVisualizerProps> = ({
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && canvas.parentElement) {
+      ro = new ResizeObserver(() => {
+        resizeCanvas();
+      });
+      ro.observe(canvas.parentElement);
+    }
+
     // Easing helper
     const easeInOutCubic = (t: number) => {
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -283,13 +291,16 @@ export const BreathVisualizer: React.FC<BreathVisualizerProps> = ({
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }
+      if (ro) {
+        ro.disconnect();
+      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('resize', resizeCanvas);
     };
   }, [isRunning, visualizerMode, target, isOled]);
 
   return (
-    <div className="relative w-full aspect-square max-w-[340px] sm:max-w-[420px] flex items-center justify-center my-auto">
+    <div className="relative w-full aspect-square max-w-[340px] sm:max-w-[420px] lg:max-w-[480px] xl:max-w-[530px] flex items-center justify-center my-auto transition-all duration-500">
       {/* HTML5 Canvas */}
       <canvas
         ref={canvasRef}
